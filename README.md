@@ -81,6 +81,6 @@ civ6matcher/
 
 以下を参考にしてください
 
-(Dockerを用いたDiscordBOTの環境構築をGCE上でやってみた)[https://zenn.dev/mixi/articles/97a39d8d6d9890]
+[Dockerを用いたDiscordBOTの環境構築をGCE上でやってみた](https://zenn.dev/mixi/articles/97a39d8d6d9890)
 
 
