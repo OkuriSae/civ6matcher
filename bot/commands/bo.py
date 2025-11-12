@@ -53,6 +53,7 @@ class TrackedMessage:
     check_emoji: Optional[str]
     dummy_emoji: Optional[str]
     notify_emoji: Optional[str]
+    recruit_emoji: Optional[str]
     participants: List[ParticipantEntry] = field(default_factory=list)
     team_one: List[str] = field(default_factory=list)
     team_two: List[str] = field(default_factory=list)
@@ -156,6 +157,12 @@ class BoManager(commands.Cog):
         except discord.HTTPException:
             notify = None
 
+        recruit = discord.PartialEmoji(name="♻️")
+        try:
+            await sent_message.add_reaction(recruit)
+        except discord.HTTPException:
+            recruit = None
+
         participants: List[ParticipantEntry] = []
         if interaction.user:
             participants.append(
@@ -174,6 +181,7 @@ class BoManager(commands.Cog):
             check_emoji=check.name if check else None,
             dummy_emoji="➕",
             notify_emoji=notify.name if notify else "📢",
+            recruit_emoji=recruit.name if recruit else "♻️",
             participants=participants,
         )
         self.tracked_messages[sent_message.id] = tracked
@@ -212,6 +220,10 @@ class BoManager(commands.Cog):
 
         if self._is_tracked_emoji(payload.emoji, data.notify_emoji):
             await self._handle_notify_reaction(payload)
+            return
+
+        if self._is_tracked_emoji(payload.emoji, data.recruit_emoji):
+            await self._handle_recruit_reaction(payload)
             return
 
     @commands.Cog.listener(name="on_raw_reaction_remove")
@@ -398,9 +410,74 @@ class BoManager(commands.Cog):
                 await self._remove_user_reaction(payload)
                 return
 
-        message = " ".join(mentions)
+        trigger_mention = ""
+        if payload.guild_id:
+            trigger_mentions = await self._resolve_display_mentions(payload.guild_id, [payload.user_id])
+            if trigger_mentions:
+                trigger_mention = f" (via {trigger_mentions[0]})"
+        if not trigger_mention:
+            trigger_mention = f" (via <@{payload.user_id}>)"
+
+        message = " ".join(mentions) + trigger_mention
         try:
             await channel.send(message, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
+        except discord.HTTPException:
+            pass
+
+        await self._remove_user_reaction(payload)
+
+    async def _handle_recruit_reaction(self, payload: discord.RawReactionActionEvent) -> None:
+        data = self.tracked_messages.get(payload.message_id)
+        if data is None:
+            await self._remove_user_reaction(payload)
+            return
+
+        channel = self.bot.get_channel(payload.channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(payload.channel_id)
+            except discord.HTTPException:
+                await self._remove_user_reaction(payload)
+                return
+
+        channel_name = getattr(channel, "name", "")
+        role_mention = resolve_role_mention(channel_name)
+        if role_mention is None:
+            await self._remove_user_reaction(payload)
+            return
+
+        main_entries = data.participants[:12]
+        participant_entries = [entry for entry in main_entries if not entry.is_dummy and entry.user_id is not None]
+        participant_count = len(participant_entries)
+
+        if participant_count <= 8:
+            min_needed = 8 - participant_count
+            max_needed = 12 - participant_count
+            message_range = f"@{min_needed}-{max_needed}"
+        elif participant_count in (9, 10):
+            min_needed = 10 - participant_count
+            max_needed = 12 - participant_count
+            message_range = f"@{min_needed}-{max_needed}"
+        elif participant_count == 11:
+            message_range = "@1"
+        else:
+            await self._remove_user_reaction(payload)
+            return
+
+        trigger_mention = ""
+        if payload.guild_id:
+            trigger_mentions = await self._resolve_display_mentions(payload.guild_id, [payload.user_id])
+            if trigger_mentions:
+                trigger_mention = trigger_mentions[0]
+        if not trigger_mention:
+            trigger_mention = f"<@{payload.user_id}>"
+
+        message = f"{trigger_mention} to {role_mention} {message_range}"
+        try:
+            await channel.send(
+                message,
+                allowed_mentions=discord.AllowedMentions(users=True, roles=True, everyone=False),
+            )
         except discord.HTTPException:
             pass
 
