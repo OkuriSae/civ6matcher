@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 try:
-import discord
-from discord import app_commands
-from discord.ext import commands
+    import discord
+    from discord import app_commands
+    from discord.ext import commands
 except ModuleNotFoundError as exc:
     raise ModuleNotFoundError(
         "discord.py がインストールされていません。仮想環境を有効化し、"
@@ -41,6 +41,25 @@ def parse_user_mention(mention: str) -> Optional[int]:
         except ValueError:
             return None
     return None
+
+
+def parse_message_id(input_str: str) -> Optional[int]:
+    """メッセージIDまたはDiscordメッセージリンクURLからメッセージIDを抽出する。"""
+    input_str = input_str.strip()
+    
+    # URL形式の場合: https://discord.com/channels/{guild_id}/{channel_id}/{message_id}
+    url_match = re.search(r"discord\.com/channels/\d+/\d+/(\d+)", input_str)
+    if url_match:
+        try:
+            return int(url_match.group(1))
+        except ValueError:
+            return None
+    
+    # 数値のみの場合
+    try:
+        return int(input_str)
+    except ValueError:
+        return None
 
 
 @dataclass
@@ -96,33 +115,30 @@ class BoManager(commands.Cog):
 
         @tree.command(name="bo", description="指定ロールをメンションして募集をかけます。")
         @app_commands.describe(
-            message="メンションに続けて表示するメッセージ",
+            start="メンションに続けて表示するメッセージ",
             remove_user="削除するユーザーのメンション（例: <@123456789>）",
-            remove_game="終了する募集のメッセージID",
-            disband_message="解散メッセージ",
+            close_game="終了する募集のメッセージIDまたはメッセージリンクURL",
         )
         async def bo_command(
             interaction: discord.Interaction,
-            message: Optional[str] = None,
+            start: Optional[str] = None,
             remove_user: Optional[str] = None,
-            remove_game: Optional[str] = None,
-            disband_message: Optional[str] = None,
+            close_game: Optional[str] = None,
         ) -> None:
-            await self._handle_bo(interaction, message, remove_user, remove_game, disband_message)
+            await self._handle_bo(interaction, start, remove_user, close_game)
 
         self.command = bo_command
 
     async def _handle_bo(
         self,
         interaction: discord.Interaction,
-        message: Optional[str],
+        start: Optional[str],
         remove_user: Optional[str] = None,
-        remove_game: Optional[str] = None,
-        disband_message: Optional[str] = None,
+        close_game: Optional[str] = None,
     ) -> None:
         # ゲーム終了モード
-        if remove_game is not None:
-            await self._handle_remove_game(interaction, remove_game, disband_message)
+        if close_game is not None:
+            await self._handle_close_game(interaction, close_game)
             return
 
         # ユーザー削除モード
@@ -139,7 +155,7 @@ class BoManager(commands.Cog):
             await interaction.response.send_message(response, ephemeral=True)
             return
 
-        body = message.strip() if message else "募集"
+        body = start.strip() if start else "募集"
         embed = discord.Embed(
             title=body,
             color=discord.Color.gold(),
@@ -304,19 +320,18 @@ class BoManager(commands.Cog):
         )
         await self._update_embed(latest_msg_id)
 
-    async def _handle_remove_game(
+    async def _handle_close_game(
         self,
         interaction: discord.Interaction,
-        remove_game: str,
-        disband_message: Optional[str] = None,
+        close_game: str,
     ) -> None:
         """ゲーム募集を終了する。"""
-        # メッセージIDをパース
-        try:
-            message_id = int(remove_game)
-        except ValueError:
+        # メッセージIDまたはメッセージリンクURLをパース
+        message_id = parse_message_id(close_game)
+        if message_id is None:
             await interaction.response.send_message(
-                "無効なメッセージIDです。数値を入力してください。",
+                "無効なメッセージIDまたはメッセージリンクです。\n"
+                "メッセージID（数値）またはDiscordメッセージリンクURLを入力してください。",
                 ephemeral=True,
             )
             return
@@ -360,11 +375,16 @@ class BoManager(commands.Cog):
             )
             return
 
-        # Embed の色を赤に変更
+        # Embed の色を赤に変更し、タイトルに【解散】を追加
         if message.embeds:
             embed = message.embeds[0]
             new_embed = discord.Embed.from_dict(embed.to_dict())
             new_embed.color = discord.Color.red()
+            # タイトルに【解散】を追加（既に追加されていない場合）
+            if new_embed.title and not new_embed.title.startswith("【解散】"):
+                new_embed.title = f"【解散】{new_embed.title}"
+            elif not new_embed.title:
+                new_embed.title = "【解散】"
             try:
                 await message.edit(embed=new_embed)
             except discord.HTTPException:
@@ -393,12 +413,8 @@ class BoManager(commands.Cog):
 
             mentions = await self._resolve_display_mentions(data.guild_id, participant_user_ids)
             mention_text = " ".join(mentions)
+            content = f"{mention_text} 解散しました"
 
-            content_parts = [mention_text]
-            if disband_message:
-                content_parts.append(disband_message.strip())
-
-            content = "\n".join(content_parts)
             try:
                 await channel.send(
                     content,
