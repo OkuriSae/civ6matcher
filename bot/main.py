@@ -49,6 +49,7 @@ class Civ6MatcherBot(commands.Bot):
 def create_bot() -> Civ6MatcherBot:
     intents = discord.Intents.default()
     intents.message_content = True
+    intents.members = True  # Server Members Intent を有効化
     bot = Civ6MatcherBot(
         command_prefix=settings.command_prefix,
         intents=intents,

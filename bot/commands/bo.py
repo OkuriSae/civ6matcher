@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 try:
-    import discord
-    from discord import app_commands
-    from discord.ext import commands
+import discord
+from discord import app_commands
+from discord.ext import commands
 except ModuleNotFoundError as exc:
     raise ModuleNotFoundError(
         "discord.py がインストールされていません。仮想環境を有効化し、"
@@ -82,7 +82,7 @@ class BoManager(commands.Cog):
             tree.remove_command(existing.name, type=existing.type)
 
         @tree.command(name="bo", description="指定ロールをメンションして募集をかけます。")
-        @app_commands.describe(message="メンションに続けて表示するメッセージ")
+    @app_commands.describe(message="メンションに続けて表示するメッセージ")
         async def bo_command(
             interaction: discord.Interaction,
             message: Optional[str] = None,
@@ -164,7 +164,18 @@ class BoManager(commands.Cog):
             recruit = None
 
         participants: List[ParticipantEntry] = []
-        if interaction.user:
+        if interaction.user and interaction.guild_id:
+            # 実行ユーザーを事前に fetch してキャッシュに保存
+            guild = self.bot.get_guild(interaction.guild_id)
+            if guild is not None:
+                try:
+                    await guild.fetch_member(interaction.user.id)
+                except discord.HTTPException:
+                    try:
+                        await self.bot.fetch_user(interaction.user.id)
+                    except discord.HTTPException:
+                        pass
+            
             participants.append(
                 ParticipantEntry(
                     key=f"user:{interaction.user.id}",
@@ -199,6 +210,17 @@ class BoManager(commands.Cog):
 
         if self._is_tracked_emoji(payload.emoji, data.join_emoji):
             if not any(entry.user_id == payload.user_id for entry in data.participants):
+                # ユーザー情報を事前に fetch してキャッシュに保存
+                guild = self.bot.get_guild(payload.guild_id)
+                if guild is not None:
+                    try:
+                        await guild.fetch_member(payload.user_id)
+                    except discord.HTTPException:
+                        try:
+                            await self.bot.fetch_user(payload.user_id)
+                        except discord.HTTPException:
+                            pass
+                
                 entry = ParticipantEntry(
                     key=f"user:{payload.user_id}",
                     user_id=payload.user_id,
@@ -295,6 +317,24 @@ class BoManager(commands.Cog):
         new_embed = discord.Embed.from_dict(base_embed.to_dict())
         main_entries = data.participants[:12]
         reserve_entries = data.participants[12:]
+
+        # 参加者ユーザーを事前に fetch してキャッシュに保存
+        if data.guild_id:
+            guild = self.bot.get_guild(data.guild_id)
+            if guild is not None:
+                all_user_ids = [
+                    entry.user_id
+                    for entry in data.participants
+                    if not entry.is_dummy and entry.user_id is not None
+                ]
+                for user_id in all_user_ids:
+                    try:
+                        await guild.fetch_member(user_id)
+                    except discord.HTTPException:
+                        try:
+                            await self.bot.fetch_user(user_id)
+                        except discord.HTTPException:
+                            pass
 
         participant_mentions = await self._format_entries(
             data.guild_id,
@@ -397,6 +437,20 @@ class BoManager(commands.Cog):
             return
 
         user_ids = [entry.user_id for entry in target_entries if entry.user_id is not None]
+        
+        # 参加者ユーザーを事前に fetch してキャッシュに保存
+        if payload.guild_id:
+            guild = self.bot.get_guild(payload.guild_id)
+            if guild is not None:
+                for user_id in user_ids:
+                    try:
+                        await guild.fetch_member(user_id)
+                    except discord.HTTPException:
+                        try:
+                            await self.bot.fetch_user(user_id)
+                        except discord.HTTPException:
+                            pass
+
         mentions = await self._resolve_display_mentions(payload.guild_id, user_ids) if payload.guild_id else []
         if not mentions:
             await self._remove_user_reaction(payload)
@@ -409,6 +463,18 @@ class BoManager(commands.Cog):
             except discord.HTTPException:
                 await self._remove_user_reaction(payload)
                 return
+
+        # 発火ユーザーを事前に fetch してキャッシュに保存
+        if payload.guild_id:
+            guild = self.bot.get_guild(payload.guild_id)
+            if guild is not None:
+                try:
+                    await guild.fetch_member(payload.user_id)
+                except discord.HTTPException:
+                    try:
+                        await self.bot.fetch_user(payload.user_id)
+                    except discord.HTTPException:
+                        pass
 
         trigger_mention = ""
         if payload.guild_id:
@@ -463,6 +529,18 @@ class BoManager(commands.Cog):
         else:
             await self._remove_user_reaction(payload)
             return
+
+        # 発火ユーザーを事前に fetch してキャッシュに保存
+        if payload.guild_id:
+            guild = self.bot.get_guild(payload.guild_id)
+            if guild is not None:
+                try:
+                    await guild.fetch_member(payload.user_id)
+                except discord.HTTPException:
+                    try:
+                        await self.bot.fetch_user(payload.user_id)
+                    except discord.HTTPException:
+                        pass
 
         trigger_mention = ""
         if payload.guild_id:
@@ -546,27 +624,30 @@ class BoManager(commands.Cog):
         guild = self.bot.get_guild(guild_id)
         mentions: List[str] = []
 
+        # 事前にすべてのユーザー情報を fetch してキャッシュに保存
+        for user_id in user_ids:
+            if guild is not None:
+                try:
+                    # ギルドメンバーとして fetch（キャッシュに保存される）
+                    await guild.fetch_member(user_id)
+                except discord.HTTPException:
+                    # ギルドメンバーでない場合は、ユーザー情報のみ fetch
+                    try:
+                        await self.bot.fetch_user(user_id)
+                    except discord.HTTPException:
+                        pass
+
+        # キャッシュから取得してメンションを生成
         for user_id in user_ids:
             mention: Optional[str] = None
 
             if guild is not None:
                 member = guild.get_member(user_id)
-                if member is None:
-                    try:
-                        member = await guild.fetch_member(user_id)
-                    except discord.HTTPException:
-                        member = None
-
                 if member is not None:
                     mention = member.mention
 
             if mention is None:
                 user = self.bot.get_user(user_id)
-                if user is None:
-                    try:
-                        user = await self.bot.fetch_user(user_id)
-                    except discord.HTTPException:
-                        user = None
                 if user is not None:
                     mention = getattr(user, "mention", None)
                     if mention is None:
