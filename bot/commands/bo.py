@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -28,6 +29,17 @@ def resolve_role_mention(channel_name: str) -> Optional[str]:
     for keyword, role_id in ROLE_MAPPING.items():
         if keyword in channel_name:
             return f"<@&{role_id}>"
+    return None
+
+
+def parse_user_mention(mention: str) -> Optional[int]:
+    """ユーザーメンション形式（<@123456789> または <@!123456789>）からユーザーIDを抽出する。"""
+    match = re.match(r"<@!?(\d+)>", mention.strip())
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
     return None
 
 
@@ -82,12 +94,16 @@ class BoManager(commands.Cog):
             tree.remove_command(existing.name, type=existing.type)
 
         @tree.command(name="bo", description="指定ロールをメンションして募集をかけます。")
-    @app_commands.describe(message="メンションに続けて表示するメッセージ")
+        @app_commands.describe(
+            message="メンションに続けて表示するメッセージ",
+            remove_user="削除するユーザーのメンション（例: <@123456789>）",
+        )
         async def bo_command(
             interaction: discord.Interaction,
             message: Optional[str] = None,
+            remove_user: Optional[str] = None,
         ) -> None:
-            await self._handle_bo(interaction, message)
+            await self._handle_bo(interaction, message, remove_user)
 
         self.command = bo_command
 
@@ -95,7 +111,13 @@ class BoManager(commands.Cog):
         self,
         interaction: discord.Interaction,
         message: Optional[str],
+        remove_user: Optional[str] = None,
     ) -> None:
+        # ユーザー削除モード
+        if remove_user is not None:
+            await self._handle_remove_user(interaction, remove_user)
+            return
+
         channel = interaction.channel
         channel_name = getattr(channel, "name", "") if channel else ""
         role_mention = resolve_role_mention(channel_name)
@@ -199,6 +221,76 @@ class BoManager(commands.Cog):
 
         if participants:
             await self._update_embed(sent_message.id)
+
+    async def _handle_remove_user(
+        self,
+        interaction: discord.Interaction,
+        remove_user: str,
+    ) -> None:
+        """参加者からユーザーを削除する。"""
+        # ユーザーメンション形式をパース
+        user_id = parse_user_mention(remove_user)
+        if user_id is None:
+            await interaction.response.send_message(
+                "無効なユーザーメンション形式です。例: <@123456789>",
+                ephemeral=True,
+            )
+            return
+
+        # チャンネル内の最新の募集メッセージを探す
+        channel = interaction.channel
+        if channel is None:
+            await interaction.response.send_message(
+                "チャンネル情報を取得できませんでした。",
+                ephemeral=True,
+            )
+            return
+
+        # 同じチャンネルの tracked_messages を探す
+        channel_tracked = [
+            (msg_id, data)
+            for msg_id, data in self.tracked_messages.items()
+            if data.channel_id == channel.id
+        ]
+
+        if not channel_tracked:
+            await interaction.response.send_message(
+                "このチャンネルに募集メッセージが見つかりませんでした。",
+                ephemeral=True,
+            )
+            return
+
+        # 最新のメッセージを取得（メッセージIDが大きいもの）
+        latest_msg_id, data = max(channel_tracked, key=lambda x: x[0])
+
+        # 参加者リストから該当ユーザーを削除
+        entry_index = next(
+            (
+                index
+                for index, entry in enumerate(data.participants)
+                if entry.user_id == user_id
+            ),
+            None,
+        )
+
+        if entry_index is None:
+            await interaction.response.send_message(
+                f"<@{user_id}> は参加者リストに登録されていません。",
+                ephemeral=True,
+            )
+            return
+
+        removed_entry = data.participants.pop(entry_index)
+        # チーム分けからも削除
+        data.team_one = [key for key in data.team_one if key != removed_entry.key]
+        data.team_two = [key for key in data.team_two if key != removed_entry.key]
+
+        # Embed を更新
+        await interaction.response.send_message(
+            f"<@{user_id}> を参加者リストから削除しました。",
+            ephemeral=True,
+        )
+        await self._update_embed(latest_msg_id)
 
     @commands.Cog.listener(name="on_raw_reaction_add")
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
