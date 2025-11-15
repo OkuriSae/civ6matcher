@@ -71,6 +71,7 @@ class TrackedMessage:
     team_two: List[str] = field(default_factory=list)
     dummy_count: int = 0
     teams_visible: bool = False
+    is_disbanded: bool = False
 
 
 class BoManager(commands.Cog):
@@ -97,13 +98,17 @@ class BoManager(commands.Cog):
         @app_commands.describe(
             message="メンションに続けて表示するメッセージ",
             remove_user="削除するユーザーのメンション（例: <@123456789>）",
+            remove_game="終了する募集のメッセージID",
+            disband_message="解散メッセージ",
         )
         async def bo_command(
             interaction: discord.Interaction,
             message: Optional[str] = None,
             remove_user: Optional[str] = None,
+            remove_game: Optional[str] = None,
+            disband_message: Optional[str] = None,
         ) -> None:
-            await self._handle_bo(interaction, message, remove_user)
+            await self._handle_bo(interaction, message, remove_user, remove_game, disband_message)
 
         self.command = bo_command
 
@@ -112,7 +117,14 @@ class BoManager(commands.Cog):
         interaction: discord.Interaction,
         message: Optional[str],
         remove_user: Optional[str] = None,
+        remove_game: Optional[str] = None,
+        disband_message: Optional[str] = None,
     ) -> None:
+        # ゲーム終了モード
+        if remove_game is not None:
+            await self._handle_remove_game(interaction, remove_game, disband_message)
+            return
+
         # ユーザー削除モード
         if remove_user is not None:
             await self._handle_remove_user(interaction, remove_user)
@@ -292,12 +304,126 @@ class BoManager(commands.Cog):
         )
         await self._update_embed(latest_msg_id)
 
+    async def _handle_remove_game(
+        self,
+        interaction: discord.Interaction,
+        remove_game: str,
+        disband_message: Optional[str] = None,
+    ) -> None:
+        """ゲーム募集を終了する。"""
+        # メッセージIDをパース
+        try:
+            message_id = int(remove_game)
+        except ValueError:
+            await interaction.response.send_message(
+                "無効なメッセージIDです。数値を入力してください。",
+                ephemeral=True,
+            )
+            return
+
+        # tracked_messages から該当メッセージを取得
+        data = self.tracked_messages.get(message_id)
+        if data is None:
+            await interaction.response.send_message(
+                "指定されたメッセージIDの募集が見つかりませんでした。",
+                ephemeral=True,
+            )
+            return
+
+        # 既に終了済みかチェック
+        if data.is_disbanded:
+            await interaction.response.send_message(
+                "この募集は既に終了しています。",
+                ephemeral=True,
+            )
+            return
+
+        # チャンネルを取得
+        channel = self.bot.get_channel(data.channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(data.channel_id)
+            except discord.HTTPException:
+                await interaction.response.send_message(
+                    "チャンネル情報を取得できませんでした。",
+                    ephemeral=True,
+                )
+                return
+
+        # メッセージを取得
+        try:
+            message = await channel.fetch_message(message_id)
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "メッセージを取得できませんでした。",
+                ephemeral=True,
+            )
+            return
+
+        # Embed の色を赤に変更
+        if message.embeds:
+            embed = message.embeds[0]
+            new_embed = discord.Embed.from_dict(embed.to_dict())
+            new_embed.color = discord.Color.red()
+            try:
+                await message.edit(embed=new_embed)
+            except discord.HTTPException:
+                pass
+
+        # 参加者にメンションして解散メッセージを送信
+        participant_user_ids = [
+            entry.user_id
+            for entry in data.participants
+            if not entry.is_dummy and entry.user_id is not None
+        ]
+
+        if participant_user_ids:
+            # 参加者を事前に fetch してキャッシュに保存
+            if data.guild_id:
+                guild = self.bot.get_guild(data.guild_id)
+                if guild is not None:
+                    for user_id in participant_user_ids:
+                        try:
+                            await guild.fetch_member(user_id)
+                        except discord.HTTPException:
+                            try:
+                                await self.bot.fetch_user(user_id)
+                            except discord.HTTPException:
+                                pass
+
+            mentions = await self._resolve_display_mentions(data.guild_id, participant_user_ids)
+            mention_text = " ".join(mentions)
+
+            content_parts = [mention_text]
+            if disband_message:
+                content_parts.append(disband_message.strip())
+
+            content = "\n".join(content_parts)
+            try:
+                await channel.send(
+                    content,
+                    allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+                )
+            except discord.HTTPException:
+                pass
+
+        # 終了フラグを設定（リアクションイベントが発火しないようにする）
+        data.is_disbanded = True
+
+        await interaction.response.send_message(
+            "ゲーム募集を終了しました。",
+            ephemeral=True,
+        )
+
     @commands.Cog.listener(name="on_raw_reaction_add")
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
         data = self.tracked_messages.get(payload.message_id)
         if data is None or payload.guild_id is None:
             return
         if payload.user_id == self.bot.user.id:
+            return
+        # 終了済みの募集ではイベントを発火しない
+        if data.is_disbanded:
             return
 
         if self._is_tracked_emoji(payload.emoji, data.join_emoji):
@@ -346,6 +472,9 @@ class BoManager(commands.Cog):
         if data is None or payload.guild_id is None:
             return
         if payload.user_id == self.bot.user.id:
+            return
+        # 終了済みの募集ではイベントを発火しない
+        if data.is_disbanded:
             return
 
         if not self._is_tracked_emoji(payload.emoji, data.join_emoji):
