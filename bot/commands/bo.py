@@ -43,25 +43,7 @@ def parse_user_mention(mention: str) -> Optional[int]:
     return None
 
 
-def parse_message_id(input_str: str) -> Optional[int]:
-    """メッセージIDまたはDiscordメッセージリンクURLからメッセージIDを抽出する。"""
-    input_str = input_str.strip()
-    
-    # URL形式の場合: https://discord.com/channels/{guild_id}/{channel_id}/{message_id}
-    url_match = re.search(r"discord\.com/channels/\d+/\d+/(\d+)", input_str)
-    if url_match:
-        try:
-            return int(url_match.group(1))
-        except ValueError:
-            return None
-    
-    # 数値のみの場合
-    try:
-        return int(input_str)
-    except ValueError:
-        return None
-
-
+# ここから下は既存コードの続き
 @dataclass
 class ParticipantEntry:
     key: str
@@ -113,11 +95,11 @@ class BoManager(commands.Cog):
         if existing is not None:
             tree.remove_command(existing.name, type=existing.type)
 
-        @tree.command(name="bo", description="指定ロールをメンションして募集をかけます。")
+        @tree.command(name="bo", description="対応するロールをメンションして募集をかけます。")
         @app_commands.describe(
-            start="メンションに続けて表示するメッセージ",
+            start="募集タイトル",
             remove_user="削除するユーザーのメンション（例: <@123456789>）",
-            close_game="終了する募集のメッセージIDまたはメッセージリンクURL",
+            close_game="終了する募集のID",
         )
         async def bo_command(
             interaction: discord.Interaction,
@@ -250,6 +232,8 @@ class BoManager(commands.Cog):
         if participants:
             await self._update_embed(sent_message.id)
 
+        # ここでの埋め込み再編集は不要（_update_embed 側でIDを常時追記）
+
     async def _handle_remove_user(
         self,
         interaction: discord.Interaction,
@@ -326,12 +310,12 @@ class BoManager(commands.Cog):
         close_game: str,
     ) -> None:
         """ゲーム募集を終了する。"""
-        # メッセージIDまたはメッセージリンクURLをパース
-        message_id = parse_message_id(close_game)
-        if message_id is None:
+        # メッセージID（数値）のみを受け付ける
+        try:
+            message_id = int(close_game.strip())
+        except (TypeError, ValueError):
             await interaction.response.send_message(
-                "無効なメッセージIDまたはメッセージリンクです。\n"
-                "メッセージID（数値）またはDiscordメッセージリンクURLを入力してください。",
+                "無効なメッセージIDです。数値のみを入力してください。",
                 ephemeral=True,
             )
             return
@@ -642,6 +626,9 @@ class BoManager(commands.Cog):
             order.extend(["チーム1", "チーム2"])
         self._reorder_fields(new_embed, order)
 
+        # タイトル直下にメッセージIDを常時表示
+        new_embed.description = f"`ID: {message_id}`"
+
         await message.edit(embed=new_embed, allowed_mentions=discord.AllowedMentions.none())
 
     async def _handle_dummy_reaction(self, payload: discord.RawReactionActionEvent) -> None:
@@ -717,9 +704,9 @@ class BoManager(commands.Cog):
         if payload.guild_id:
             trigger_mentions = await self._resolve_display_mentions(payload.guild_id, [payload.user_id])
             if trigger_mentions:
-                trigger_mention = f" (via {trigger_mentions[0]})"
+                trigger_mention = f" (by {trigger_mentions[0]})"
         if not trigger_mention:
-            trigger_mention = f" (via <@{payload.user_id}>)"
+            trigger_mention = f" (by <@{payload.user_id}>)"
 
         message = " ".join(mentions) + trigger_mention
         try:
