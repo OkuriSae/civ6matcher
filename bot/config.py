@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import os
-from typing import Optional
+from pathlib import Path
+from typing import Dict, Optional
 
 from dotenv import load_dotenv
 
@@ -39,5 +41,50 @@ def load_settings() -> Settings:
 
 
 settings = load_settings()
+
+
+def load_role_settings() -> Dict:
+    """settings.json からロール設定を読み込む。"""
+    settings_path = Path(__file__).parent / "settings.json"
+    if not settings_path.exists():
+        raise FileNotFoundError(f"設定ファイルが見つかりません: {settings_path}")
+
+    with open(settings_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+class RoleSettingsManager:
+    """ロール設定を管理するクラス。メモリ内での設定変更をサポート。"""
+
+    def __init__(self) -> None:
+        self._base_settings = load_role_settings()
+        self._runtime_overrides: Dict = {}
+
+    def get_settings(self) -> Dict:
+        """現在の設定を取得する（オーバーライドを適用した状態）。"""
+        settings = self._base_settings.copy()
+        # runtime_overrides で上書き
+        for key, value in self._runtime_overrides.items():
+            if isinstance(value, dict) and key in settings and isinstance(settings[key], dict):
+                settings[key] = {**settings[key], **value}
+            else:
+                settings[key] = value
+        return settings
+
+    def set_override(self, key: str, value) -> None:
+        """ランタイムでの設定オーバーライドを設定する。"""
+        self._runtime_overrides[key] = value
+
+    def clear_overrides(self) -> None:
+        """すべてのオーバーライドをクリアする。"""
+        self._runtime_overrides.clear()
+
+    def reload_from_file(self) -> None:
+        """ファイルから設定を再読み込みする。"""
+        self._base_settings = load_role_settings()
+
+
+# グローバルな設定マネージャーのインスタンス
+role_settings_manager = RoleSettingsManager()
 
 

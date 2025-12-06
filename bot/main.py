@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 COMMAND_EXTENSIONS = (
     "bot.commands.ping",
     "bot.commands.bo",
+    "bot.commands.settings",
 )
 
 

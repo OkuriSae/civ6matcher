@@ -17,16 +17,25 @@ except ModuleNotFoundError as exc:
         "`pip install -r requirements.txt` を実行してください。"
     ) from exc
 
+from ..config import role_settings_manager
 
-ROLE_MAPPING = {
-    "エンジョイ卓": 1280187004092547112,
-    "初心者卓": 1280187036229173248,
-}
+
+def get_role_mapping() -> Dict[str, int]:
+    """現在のロールマッピング設定を取得する。"""
+    settings = role_settings_manager.get_settings()
+    return settings.get("channel_role_map", {})
+
+
+def get_role_weights() -> Dict[str, int]:
+    """現在のロール重み設定を取得する。"""
+    settings = role_settings_manager.get_settings()
+    return settings.get("role_weights", {})
 
 
 def resolve_role_mention(channel_name: str) -> Optional[str]:
     """チャンネル名に応じてメンション対象ロールを決定する。"""
-    for keyword, role_id in ROLE_MAPPING.items():
+    role_mapping = get_role_mapping()
+    for keyword, role_id in role_mapping.items():
         if keyword in channel_name:
             return f"<@&{role_id}>"
     return None
@@ -944,8 +953,9 @@ class BoManager(commands.Cog):
         guild = self.bot.get_guild(guild_id)
 
         async def resolve_weight(user_id: Optional[int]) -> int:
+            role_weights = get_role_weights()
             if user_id is None:
-                return 1
+                return role_weights.get("default", 1)
             member = None
             if guild is not None:
                 member = guild.get_member(user_id)
@@ -955,15 +965,15 @@ class BoManager(commands.Cog):
                     except discord.HTTPException:
                         member = None
             if member is None:
-                return 1
-            role_ids = {role.id for role in member.roles}
-            if 1280186048395218995 in role_ids:
-                return 4
-            if 1280186025762750583 in role_ids:
-                return 3
-            if 1280185996184522927 in role_ids:
-                return 2
-            return 1
+                return role_weights.get("default", 1)
+            role_ids = {str(role.id) for role in member.roles}
+            # role_weights から該当するロールの重みを取得（優先度の高い順）
+            for role_id_str, weight in sorted(role_weights.items(), key=lambda x: x[1], reverse=True):
+                if role_id_str == "default":
+                    continue
+                if role_id_str in role_ids:
+                    return weight
+            return role_weights.get("default", 1)
 
         for entry in entries:
             weight = await resolve_weight(entry.user_id)
