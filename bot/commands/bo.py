@@ -32,6 +32,12 @@ def get_role_weights() -> Dict[str, int]:
     return settings.get("role_weights", {})
 
 
+def get_channel_role_map() -> Dict[str, int]:
+    """現在のチャンネルロールマッピング設定を取得する。"""
+    settings = role_settings_manager.get_settings()
+    return settings.get("channel_role_id_map", {})
+
+
 def resolve_role_mention(channel_name: str) -> Optional[str]:
     """チャンネル名に応じてメンション対象ロールを決定する。"""
     role_mapping = get_role_mapping()
@@ -39,6 +45,18 @@ def resolve_role_mention(channel_name: str) -> Optional[str]:
         if keyword in channel_name:
             return f"<@&{role_id}>"
     return None
+
+
+def resolve_role_mention_by_channel_id(channel_id: int) -> Optional[str]:
+    """チャンネルIDに応じてロールメンションを決定する。
+
+    channel_role_id_mapに基づいて、ロールIDへのメンションを返す。
+    """
+    channel_role_map = get_channel_role_map()
+    role_id = channel_role_map.get(str(channel_id))
+    if role_id is None:
+        return None
+    return f"<@&{role_id}>"
 
 
 def parse_user_mention(mention: str) -> Optional[int]:
@@ -138,10 +156,19 @@ class BoManager(commands.Cog):
             return
 
         channel = interaction.channel
-        channel_name = getattr(channel, "name", "") if channel else ""
-        role_mention = resolve_role_mention(channel_name)
+        if channel is None:
+            await interaction.response.send_message("チャンネル情報を取得できませんでした", ephemeral=True)
+            return
 
-        if role_mention is None:
+        # チャンネルIDベースのロールメンション取得を優先
+        mention_text = resolve_role_mention_by_channel_id(channel.id)
+
+        # チャンネルIDベースで見つからない場合は、従来のチャンネル名ベースで取得
+        if mention_text is None:
+            channel_name = getattr(channel, "name", "")
+            mention_text = resolve_role_mention(channel_name)
+
+        if mention_text is None:
             response = "未対応のチャンネルです"
             await interaction.response.send_message(response, ephemeral=True)
             return
@@ -153,7 +180,7 @@ class BoManager(commands.Cog):
         )
         embed.add_field(name="参加者", value="なし", inline=False)
 
-        content = role_mention
+        content = mention_text
 
         await interaction.response.send_message(
             content=content,

@@ -27,7 +27,6 @@ class SettingsManager(commands.Cog):
     @app_commands.command(name="settings", description="Bot の設定を管理します")
     @app_commands.describe(
         action="実行するアクション (show: 表示, set: 設定, clear: クリア, reload: 再読み込み)",
-        key="設定キー (channel_role_map または role_weights)",
         value="設定値 (JSON形式の文字列)",
     )
     @app_commands.choices(action=[
@@ -36,22 +35,17 @@ class SettingsManager(commands.Cog):
         app_commands.Choice(name="clear - すべてのオーバーライドをクリア", value="clear"),
         app_commands.Choice(name="reload - ファイルから再読み込み", value="reload"),
     ])
-    @app_commands.choices(key=[
-        app_commands.Choice(name="channel_role_map - チャンネル名とロールIDのマッピング", value="channel_role_map"),
-        app_commands.Choice(name="role_weights - ロールIDと重みのマッピング", value="role_weights"),
-    ])
     async def settings_command(
         self,
         interaction: discord.Interaction,
         action: str,
-        key: Optional[str] = None,
         value: Optional[str] = None,
     ) -> None:
         """設定管理コマンドのハンドラ。"""
         if action == "show":
             await self._handle_show(interaction)
         elif action == "set":
-            await self._handle_set(interaction, key, value)
+            await self._handle_set(interaction, value)
         elif action == "clear":
             await self._handle_clear(interaction)
         elif action == "reload":
@@ -77,17 +71,9 @@ class SettingsManager(commands.Cog):
     async def _handle_set(
         self,
         interaction: discord.Interaction,
-        key: Optional[str],
         value: Optional[str],
     ) -> None:
-        """設定を上書きする。"""
-        if key is None:
-            await interaction.response.send_message(
-                "設定キー (key) を指定してください。",
-                ephemeral=True,
-            )
-            return
-
+        """設定を上書きする（settings.json全体を置き換え）。"""
         if value is None:
             await interaction.response.send_message(
                 "設定値 (value) を指定してください。",
@@ -104,11 +90,19 @@ class SettingsManager(commands.Cog):
             )
             return
 
-        role_settings_manager.set_override(key, parsed_value)
+        # parsed_valueがdictであることを確認
+        if not isinstance(parsed_value, dict):
+            await interaction.response.send_message(
+                "設定値はJSONオブジェクト（辞書）である必要があります。",
+                ephemeral=True,
+            )
+            return
+
+        role_settings_manager.set_all_settings(parsed_value)
 
         embed = discord.Embed(
             title="設定を更新しました",
-            description=f"キー: `{key}`\n値:\n```json\n{json.dumps(parsed_value, ensure_ascii=False, indent=2)}\n```",
+            description=f"```json\n{json.dumps(parsed_value, ensure_ascii=False, indent=2)}\n```",
             color=discord.Color.green(),
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)

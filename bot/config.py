@@ -62,18 +62,18 @@ class RoleSettingsManager:
 
     def get_settings(self) -> Dict:
         """現在の設定を取得する（オーバーライドを適用した状態）。"""
-        settings = self._base_settings.copy()
-        # runtime_overrides で上書き
-        for key, value in self._runtime_overrides.items():
-            if isinstance(value, dict) and key in settings and isinstance(settings[key], dict):
-                settings[key] = {**settings[key], **value}
-            else:
-                settings[key] = value
-        return settings
+        # runtime_overridesが空でない場合は、それを優先して返す
+        if self._runtime_overrides:
+            return self._runtime_overrides.copy()
+        return self._base_settings.copy()
 
     def set_override(self, key: str, value) -> None:
         """ランタイムでの設定オーバーライドを設定する。"""
         self._runtime_overrides[key] = value
+
+    def set_all_settings(self, settings: Dict) -> None:
+        """設定全体をオーバーライドする。"""
+        self._runtime_overrides = settings.copy()
 
     def clear_overrides(self) -> None:
         """すべてのオーバーライドをクリアする。"""
